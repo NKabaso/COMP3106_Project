@@ -1,0 +1,78 @@
+import random
+import csv
+import numpy as np
+import matplotlib.pyplot as plt
+import torch
+import matplotlib.image as mpimg # for loading in images
+
+def loadData():
+    """
+    Load in the data
+    """
+    #Directory paths
+    #ImVisible: Pedestrian Traffic Light Dataset
+    IMAGE_DIR = 'dataset'
+    TRAINING_ANNOTATIONS = 'training_annotations.csv'
+    TESTING_ANNOTATIONS = 'testing_annotations.csv'
+    
+    #Dictionaries
+    labeled_images = {}
+    
+    # Load annotations
+    with open(TRAINING_ANNOTATIONS, 'r') as file:
+        dict_reader = csv.DictReader(file)
+        
+        for entry in dict_reader:
+            image_name = entry['file'] #name of the image file
+            mode = entry['mode'] #mode: '0' red, '1' green, '2' countdown green '3'countdown blank '4' None
+            #midline coordinates of the pedestrian crossing based
+            # coordinates are in pixels for a 4032x3024 image
+            x1 = int(entry['x1']) 
+            y1 = int(entry['y1'])
+            x2 = int(entry['x2'])
+            y2 = int(entry['y2'])
+            block = entry['block'] #whether walkway is blocked
+            
+            image = mpimg.imread(f"{IMAGE_DIR}/{image_name}")
+            points = [x1/4032, y1/3024, x2/4032, y2/3024] #normalized coordinate values to be between [0, 1]
+            image = np.transpose(image, (2, 0, 1)) #change image shape from (H, W, C) to (C, H, W)
+            points = torch.FloatTensor(points)
+            labeled_images[image_name] = (image, mode, points, block) #store image and its label info in dictionary
+            
+    return labeled_images
+
+def safety_one_hot_code(label):
+    """
+    One hot encode the label
+    """
+    #one_hot = np.zeros(5) #5 possible classes: red, green, countdown green, countdown blank, none
+    #one_hot[int(label)] = 1
+    
+    #Safe or not safe hot encoding
+    #[not safe, safe]
+    one_hot = np.zeros(2) #2 possible classes: safe, not safe
+    if (label[1] == '1' and label[3] == '0') or (label[1] == '2' and label[3] == '0'): 
+        one_hot[1] = 1 #safe to cross
+    else:
+        one_hot[0] = 1 #not safe to cross
+    return one_hot
+
+def one_hot_code(label):
+    """
+    One hot encode the label
+    """
+    one_hot = np.zeros(5) #5 possible classes: red, green, countdown green, countdown blank, none
+    if label[2] == '0':
+        one_hot[0] = 1 #red
+    elif label[2] == '1':
+        one_hot[1] = 1 #green
+    elif label[2] == '2':
+        one_hot[2] = 1 #countdown green
+    elif label[2] == '3':
+        one_hot[3] = 1 #countdown blank
+    elif label[2] == '4':
+        one_hot[4] = 1 #none
+    return one_hot
+
+
+        

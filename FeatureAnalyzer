@@ -1,0 +1,138 @@
+import cv2
+import numpy as np
+from scipy import sndimage, signal
+
+class FeatureAnalyzer:
+    def __init__(self):
+        
+        # Predefined color ranges for traffic elements
+        self.red_light_range_hsv = [(0, 70, 50), (10, 255, 255)]  # Red traffic light
+        self.yellow_light_range_hsv = [(20, 100, 100), (30, 255, 255)]  # Yellow light
+        self.green_light_range_hsv = [(35, 50, 50), (85, 255, 255)]  # Green light
+        
+        # Crosswalk pattern parameters
+        #Tweak as needed
+        self.crosswalk_stripe_width = 0.4  # meters (typical)
+        self.crosswalk_stripe_gap = 0.6  # meters
+        
+        
+    def analyze(self, image):
+        
+        #Pre-process image
+        #Image is grey scaled for more effective edge and pattern detection
+        gray_image = cv2.cvtColor(image, cv2.COLOR_RGB2GRAY) 
+        h, w = gray_image.shape
+        
+        features ={}
+        
+        #Crosswalk detection (assumption: crosswalks are always present)
+        crosswalk_features = self.detect_crosswalk_patterns(image, gray_image)
+        features.update(crosswalk_features)
+        
+        # Get crosswalk region for further analysis
+        crosswalk_mask = crosswalk_features.get('crosswalk_mask', np.zeros((h, w), dtype=np.uint8))
+        crosswalk_bbox = crosswalk_features.get('crosswalk_bbox', (0, 0, w, h))
+        
+        #Traffic light analysis
+        signal_features = self._analyze_traffic_signals(image, crosswalk_bbox)
+        features.update(signal_features)
+        
+        #Vehicle presence analysis
+        vehicle_features = self._analyze_vehicle_presence(image, gray_image, crosswalk_bbox, crosswalk_mask)
+        features.update(vehicle_features)
+        
+        #Pestrian blockage analysis
+        pedestrian_features = self._analyze_pedestrian_blockage(image, gray_image, crosswalk_bbox, crosswalk_mask)
+        features.update(pedestrian_features)
+        
+        return features
+    
+    def detect_crosswalk_patterns(self, image, gray_image):
+        """
+        Detect crosswalk patterns in the image using edge detection and pattern recognition.
+        """
+        features = {}
+        #Canny finds edges by looking for sharp changes in intensity
+        edges = cv2.Canny(gray_image, 50, 150) 
+        
+        # Look for parallel lines pattern (zebra stripes
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=100, minLineLength=30, maxLineGap=10)
+        if lines is not None and len(lines) > 3:
+            # Filter for near-horizontal lines (crosswalk stripes)
+            horizontal_lines = 0
+            stripe_lengths = []
+            
+            for line in lines[:min(50, len(lines))]:
+                x1, y1, x2, y2 = line[0]
+                angle = np.abs(np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi)
+                
+                # Near-horizontal lines (within ±15 degrees)
+                if (angle < 15) or (angle > 165):
+                    horizontal_lines += 1
+                    length = np.sqrt((x2 - x1)**2 + (y2 - y1)**2)
+                    stripe_lengths.append(length)
+            
+            features['crosswalk_line_count'] = horizontal_lines
+            features['avg_stripe_length'] = np.mean(stripe_lengths) if stripe_lengths else 0
+            
+            # Check for regular spacing pattern
+            #Code from @DeepSeek (revise)
+            if horizontal_lines >= 4:
+                # Analyze vertical distribution of lines
+                midpoints = []
+                for line in lines[:min(50, len(lines))]:
+                    x1, y1, x2, y2 = line[0]
+                    angle = np.abs(np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi)
+                    if (angle < 15) or (angle > 165):
+                        midpoints.append((y1 + y2) / 2)
+                
+                if len(midpoints) >= 4:
+                    midpoints_sorted = sorted(midpoints)
+                    gaps = np.diff(midpoints_sorted)
+                    gap_std = np.std(gaps)
+                    
+                    # Regular spacing indicates crosswalk
+                    if gap_std < 20:  # Heuristic threshold
+                        features['crosswalk_detected'] = True
+                        features['crosswalk_confidence'] = min(horizontal_lines / 10, 1.0)
+                        features['crosswalk_regularity'] = 1.0 - min(gap_std / 10, 1.0)
+                        
+                        # Estimate crosswalk region
+                        y_min, y_max = int(min(midpoints_sorted)), int(max(midpoints_sorted))
+                        features['crosswalk_bbox'] = (0, y_min - 20, gray_image.shape[1], y_max + 20)
+                        
+                        # Create crosswalk mask
+                        mask = np.zeros(gray_image.shape, dtype=np.uint8)
+                        for line in lines[:min(50, len(lines))]:
+                            x1, y1, x2, y2 = line[0]
+                            angle = np.abs(np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi)
+                            if (angle < 15) or (angle > 165):
+                                cv2.line(mask, (x1, y1), (x2, y2), 255, 3)
+                        features['crosswalk_mask'] = mask
+        
+        return features
+    
+    def analyze_traffic_signals(self, image, crosswalk_bbox):
+        features = {}
+
+    def extract_hsv_histogram(self, image):
+        """
+        Extract HSV color histogram features from the image.
+        """
+        # Convert image to HSV color space
+        hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+
+        # Compute color histograms for each channel
+        h_hist = cv2.calcHist([hsv_image], [0], None, [32], [0, 180])
+        s_hist = cv2.calcHist([hsv_image], [1], None, [32], [0, 256])
+        v_hist = cv2.calcHist([hsv_image], [2], None, [32], [0, 256])
+
+        # Normalize histograms
+        h_hist = cv2.normalize(h_hist, h_hist).flatten()
+        s_hist = cv2.normalize(s_hist, s_hist).flatten()
+        v_hist = cv2.normalize(v_hist, v_hist).flatten()
+
+        # Concatenate histograms into a single feature vector
+        feature_vector = np.concatenate((h_hist, s_hist, v_hist))
+
+        return feature_vector

@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 from scipy import sndimage, signal
+from ultralytics import YOLO
 
 class FeatureAnalyzer:
     def __init__(self):
@@ -38,11 +39,11 @@ class FeatureAnalyzer:
         features.update(signal_features)
         
         #Vehicle presence analysis
-        vehicle_features = self._analyze_vehicle_presence(image, gray_image, crosswalk_bbox, crosswalk_mask)
+        vehicle_features = self.analyze_vehicle_presence(image, gray_image, crosswalk_bbox, crosswalk_mask)
         features.update(vehicle_features)
         
         #Pestrian blockage analysis
-        pedestrian_features = self._analyze_pedestrian_blockage(image, gray_image, crosswalk_bbox, crosswalk_mask)
+        pedestrian_features = self.analyze_pedestrian_blockage(image, gray_image, crosswalk_bbox, crosswalk_mask)
         features.update(pedestrian_features)
         
         return features
@@ -114,6 +115,224 @@ class FeatureAnalyzer:
     
     def analyze_traffic_signals(self, image, crosswalk_bbox):
         features = {}
+        hsv_image = cv2.cvtColor(image, cv2.COLOR_RGB2HSV)
+        
+        #Traffic light detection 
+        #cv2.inRange creates a binary mask where the colors within the specified range are white (255) and others are black (0)
+        red_light_mask = cv2.inRange(hsv_image, 
+                                    np.array(self.red_light_range_hsv[0]), 
+                                    np.array(self.red_light_range_hsv[1]))
+        yellow_light_mask = cv2.inRange(hsv_image,
+                                       np.array(self.yellow_light_range_hsv[0]),
+                                       np.array(self.yellow_light_range_hsv[1]))
+        green_light_mask = cv2.inRange(hsv_image,
+                                      np.array(self.green_light_range_hsv[0]),
+                                      np.array(self.green_light_range_hsv[1]))
+        
+        # Look for circular shapes (traffic lights)
+        red_contours, _ = cv2.findContours(red_light_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        green_contours, _ = cv2.findContours(green_light_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        features['red_light_detected'] = len(red_contours) > 0
+        features['green_light_detected'] = len(green_contours) > 0
+        
+        # Analyze pedestrian crossing signals if present
+        # Look for "walk" vs "don't walk" signals (typically rectangular with specific colors)
+        walk_signal_features = self.detect_pedestrian_signals(image, hsv_image)
+        features.update(walk_signal_features)
+        
+        # Determine signal state
+        if features['red_light_detected'] and not features['green_light_detected']:
+            features['signal_state'] = 'red'
+            features['signal_safety'] = 0.2
+        elif features['green_light_detected'] and not features['red_light_detected']:
+            features['signal_state'] = 'green'
+            features['signal_safety'] = 0.8
+        elif features.get('walk_signal_detected', False):
+            features['signal_state'] = 'walk'
+            features['signal_safety'] = 0.9
+        elif features.get('dont_walk_signal_detected', False):
+            features['signal_state'] = 'dont_walk'
+            features['signal_safety'] = 0.1
+        else:
+            features['signal_state'] = 'unknown'
+            features['signal_safety'] = 0.5  # Neutral
+            
+        return features
+        
+    def detect_pedestrian_signals(self, image, hsv_image):
+        "Detects pedestrian crossing signals in the image."
+        features = {}
+        # Define color ranges for walk and don't walk signals
+        walk_signal_range_hsv = [(40, 100, 100), (80, 255, 255)]  # Greenish
+        dont_walk_signal_range_hsv = [(0, 100, 100), (10, 255, 255)]  # Reddish
+        
+        walk_signal_mask = cv2.inRange(hsv_image, np.array(walk_signal_range_hsv[0]),walk_signal_range_hsv[1])
+        dont_walk_signal_mask = cv2.inRange(hsv_image, np.array(dont_walk_signal_range_hsv[0]),dont_walk_signal_range_hsv[1])
+        
+        # Find contours for walk signals
+        edges = cv2.Canny(cv2.cvtColor(image, cv2.COLOR_RGB2GRAY), 50, 150)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        features['walk_signal_detected'] = False
+        features['dont_walk_signal_detected'] = False
+        #@DeepSeek code for shape and color analysis
+        for contour in contours:
+            if cv2.contourArea(contour) > 100:  # Minimum size
+                # Approximate shape
+                perimeter = cv2.arcLength(contour, True)
+                approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+                
+                # Check for rectangular shape (4 corners)
+                if len(approx) == 4:
+                    x, y, w, h = cv2.boundingRect(contour)
+                    aspect_ratio = w / float(h)
+                    
+                    # Typical signal aspect ratio
+                    if 0.5 < aspect_ratio < 2.0:
+                        # Check color content inside rectangle
+                        region_of_interest = image[y:y+h, x:x+w]
+                        roi_hsv = cv2.cvtColor(region_of_interest, cv2.COLOR_RGB2HSV)
+                        
+                        # Check for red/orange content
+                        red_in_roi = cv2.inRange(roi_hsv, 
+                                                np.array([0, 100, 100]), 
+                                                np.array([20, 255, 255]))
+                        red_ratio = np.sum(red_in_roi > 0) / (w * h)
+                        
+                        # Check for white content
+                        white_in_roi = cv2.inRange(roi_hsv,
+                                                  np.array([0, 0, 200]),
+                                                  np.array([180, 30, 255]))
+                        white_ratio = np.sum(white_in_roi > 0) / (w * h)
+                        
+                        if red_ratio > 0.3:
+                            features['dont_walk_signal_detected'] = True
+                        elif white_ratio > 0.3:
+                            features['walk_signal_detected'] = True
+        
+        return features
+    
+    def analyze_vehicle_presence(self, image, gray_image, crosswalk_bbox, crosswalk_mask):
+        """
+        Analyze vehicle presence near the crosswalk.
+        """
+        features = {}
+        x, y, w, h = crosswalk_bbox 
+        crosswalk_area = gray_image[y:y+h, x:x+w]
+        
+        # Use edge detection to find vehicles
+        edges = cv2.Canny(crosswalk_area, 50, 150)
+        
+        # Count edge pixels as a proxy for vehicle presence
+        edge_pixel_count = np.sum(edges > 0)
+        area_size = w * h
+        edge_density = edge_pixel_count / area_size if area_size > 0 else 0
+        
+        features['vehicle_edge_density'] = edge_density
+        
+        # Heuristic: higher edge density may indicate vehicles
+        features['vehicle_present'] = edge_density > 0.01  # Threshold to be tuned
+        
+        return features
+    
+    def detect_vehicles(self, image, crosswalk_bbox):
+        """
+        Detect vehicles in the image using a pre-trained YOLO model.
+        """
+        features = {}
+        model = YOLO('yolov8n.pt')  # Load a pre-trained YOLOv8 model
+        cx, cy, cw, ch = crosswalk_bbox
+        cross_rect = (cx, cy, cx+cw, cy+ch)
+        results = model(image)
+        
+        #Intersection over Union calculation
+        def iou(vehicle_box, cross_walk_box):
+            #Determines the overlap between two bounding boxes
+            x1 = max(vehicle_box[0], cross_walk_box[0])
+            y1 = max(vehicle_box[1], cross_walk_box[1])
+            x2 = min(vehicle_box[2], cross_walk_box[2])
+            y2 = min(vehicle_box[3], cross_walk_box[3])
+
+            inter = max(0, x2 - x1) * max(0, y2 - y1) #area of intersection
+            if inter == 0:
+                return 0
+
+            area1 = (vehicle_box[2]-vehicle_box[0]) * (vehicle_box[3]-vehicle_box[1])
+            area2 = (cross_walk_box[2]-cross_walk_box[0]) * (cross_walk_box[3]-cross_walk_box[1])
+            return inter / float(area1 + area2 - inter) #returns union area
+         
+        vehicle_count = 0
+        #detect vehicles in the image
+        for result in results:
+            for box in result.boxes:
+                cls_id = int(box.cls[0])
+                confidence =float(box.conf[0])
+                x1, y1, x2, y2 = map(int, box.xyxy[0])
+                # COCO vehicle class IDs:
+                # car=2, motorcycle=3, bus=5, truck=7
+                if cls_id [2, 3, 5, 7] and confidence > 0.5 and iou((x1, y1, x2, y2), cross_rect) > 0.05: 
+                    vehicle_count += 1
+        
+        features['vehicle_count'] = vehicle_count
+        features['vehicle_present'] = vehicle_count > 0
+        
+        return features
+    
+    #Reexamine use
+    #DeepSeek code
+    def _analyze_static_pedestrians(self, image, gray_scale_image, crosswalk_bbox, crosswalk_mask):
+        """Analyze pedestrians and obstacles in crosswalk."""
+        features = {}
+        
+        # Human-like shape detection (simplified)
+        # Look for vertical elongated shapes with aspect ratio ~0.3-0.6
+        edges = cv2.Canny(gray_scale_image, 50, 150)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        pedestrian_count = 0
+        pedestrians_in_crosswalk = 0
+        
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if 1000 < area < 20000:  # Human-sized
+                x, y, w, h = cv2.boundingRect(contour)
+                aspect_ratio = h / float(w)  # Height/width for humans
+                
+                if 1.5 < aspect_ratio < 4.0:  # Human-like aspect ratio
+                    pedestrian_count += 1
+                    
+                    # Check if in crosswalk
+                    if crosswalk_mask is not None and crosswalk_mask.size > 0:
+                        # Simple check: if contour center is in crosswalk region
+                        center_x, center_y = x + w//2, y + h//2
+                        if (crosswalk_bbox[0] < center_x < crosswalk_bbox[2] and 
+                            crosswalk_bbox[1] < center_y < crosswalk_bbox[3]):
+                            pedestrians_in_crosswalk += 1
+        
+        features['pedestrian_count_total'] = pedestrian_count
+        features['pedestrians_in_crosswalk'] = pedestrians_in_crosswalk
+        
+        # Obstacle detection in crosswalk
+        if crosswalk_mask is not None and crosswalk_mask.any():
+            # Look for non-white objects in crosswalk area
+            crosswalk_area = cv2.bitwise_and(image, image, mask=crosswalk_mask)
+            crosswalk_gray = cv2.cvtColor(crosswalk_area, cv2.COLOR_RGB2GRAY)
+            
+            # Threshold to find dark spots (obstacles)
+            _, obstacles = cv2.threshold(crosswalk_gray, 150, 255, cv2.THRESH_BINARY_INV)
+            obstacle_contours, _ = cv2.findContours(obstacles, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            obstacle_area = 0
+            for contour in obstacle_contours:
+                obstacle_area += cv2.contourArea(contour)
+            
+            crosswalk_pixel_count = np.sum(crosswalk_mask > 0)
+            features['obstacle_coverage_ratio'] = obstacle_area / crosswalk_pixel_count if crosswalk_pixel_count > 0 else 0
+        else:
+            features['obstacle_coverage_ratio'] = 0
+            
+        return features
 
     def extract_hsv_histogram(self, image):
         """

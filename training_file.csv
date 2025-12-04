@@ -1,8 +1,8 @@
 ﻿file,mode,x1,y1,x2,y2,block
-heon_IMG_1732.JPG,1,1842,1194,1,2266,not_blocked
 john_IMG_1254.jpg,3,1801,1102,2583,3024,not_blocked
 sam_IMG_2006.JPG,0,2485,1533,4032,3005,blocked
 sam_IMG_2433.JPG,3,2097,1312,2122,3024,not_blocked
+john_IMG_0556.jpg,0,2204,1246,3858,3024,blocked
 john_IMG_2264.jpg,3,2588,914,1,2304,not_blocked
 heon_IMG_0564.JPG,0,1973,1486,1998,3024,not_blocked
 IMG_1976.JPG,2,1883,1065,1351,3024,not_blocked
@@ -2348,7 +2348,6 @@ sam_IMG_1295.jpg,0,2054,1583,4032,2340,blocked
 heon_IMG_1307.JPG,4,752,1152,4032,2956,blocked
 john_IMG_0539.jpg,0,2100,1267,2901,3024,not_blocked
 john_IMG_1691.jpg,3,1716,1079,4032,2089,not_blocked
-john_IMG_0556.jpg,0,2204,1246,3858,3024,blocked
 sam_IMG_0961.jpg,1,2170,1744,2686,3024,not_blocked
 john_IMG_0800.jpg,0,1931,1470,3402,3024,not_blocked
 john_IMG_2806.jpg,2,2710,844,1,2255,not_blocked

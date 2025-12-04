@@ -39,8 +39,8 @@ class FeatureExtraction:
         features.update(signal_features)
         
         #Vehicle presence analysis
-        #vehicle_features = self.analyze_vehicle_presence(image, gray_image, crosswalk_bbox, crosswalk_mask)
-        vehicle_features = self.detect_vehicles(image, crosswalk_bbox)
+        vehicle_features = self.analyze_vehicle_presence(image, gray_image, crosswalk_bbox, crosswalk_mask)
+        #vehicle_features = self.detect_vehicles(image, crosswalk_bbox)
         features.update(vehicle_features)
         
         #Pestrian blockage analysis
@@ -204,11 +204,11 @@ class FeatureExtraction:
                                                 np.array([20, 255, 255]))
                         red_ratio = np.sum(red_in_roi > 0) / (w * h)
                         
-                        # Check for white content
-                        white_in_roi = cv2.inRange(roi_hsv,
-                                                  np.array([0, 0, 200]),
-                                                  np.array([180, 30, 255]))
-                        white_ratio = np.sum(white_in_roi > 0) / (w * h)
+                        # Check for green content
+                        green_in_roi = cv2.inRange(roi_hsv,
+                                                  np.array([40, 100, 100]),
+                                                  np.array([80, 255, 255]))
+                        white_ratio = np.sum(green_in_roi > 0) / (w * h)
                         
                         if red_ratio > 0.3:
                             features['dont_walk_signal_detected'] = True
@@ -225,18 +225,52 @@ class FeatureExtraction:
         x, y, w, h = crosswalk_bbox 
         crosswalk_area = gray_image[y:y+h, x:x+w]
         
-        # Use edge detection to find vehicles
-        edges = cv2.Canny(crosswalk_area, 50, 150)
+        """Analyze vehicles in static scene for immediate threats."""
+        features = {}
         
-        # Count edge pixels as a proxy for vehicle presence
-        edge_pixel_count = np.sum(edges > 0)
-        area_size = w * h
-        edge_density = edge_pixel_count / area_size if area_size > 0 else 0
+        x_min, y_min, x_max, y_max = crosswalk_bbox
+        crosswalk_region = gray_image[y_min:y_max, x_min:x_max]
         
-        features['vehicle_edge_density'] = edge_density
+        # Edge density in approach zones
+        left_approach = gray_image[:, :x_min//2] if x_min > 0 else gray_image[:, :gray_image.shape[1]//4]
+        right_approach = gray_image[:, x_max + (gray_image.shape[1] - x_max)//2:] if x_max < gray_image.shape[1] else gray_image[:, 3*gray_image.shape[1]//4:]
         
-        # Heuristic: higher edge density may indicate vehicles
-        features['vehicle_present'] = edge_density > 0.01  # Threshold to be tuned
+        edges_left = cv2.Canny(left_approach, 50, 150)
+        edges_right = cv2.Canny(right_approach, 50, 150)
+        
+        features['edge_density_left'] = np.sum(edges_left > 0) / edges_left.size
+        features['edge_density_right'] = np.sum(edges_right > 0) / edges_right.size
+        
+        # Vehicle-like object detection (simple heuristics)
+        # Look for dark rectangular shapes near crosswalk
+        _, dark_mask = cv2.threshold(gray_image, 60, 255, cv2.THRESH_BINARY_INV)
+        dark_contours, _ = cv2.findContours(dark_mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        vehicle_count = 0
+        min_distance_to_crosswalk = float('inf')
+        
+        for contour in dark_contours:
+            area = cv2.contourArea(contour)
+            if 500 < area < 50000:  # Vehicle-sized objects
+                x, y, w, h = cv2.boundingRect(contour)
+                aspect_ratio = w / float(h)
+                
+                # Vehicle-like aspect ratios
+                if 1.2 < aspect_ratio < 4.0:
+                    vehicle_count += 1
+                    
+                    # Distance to crosswalk
+                    contour_center_y = y + h//2
+                    distance_to_crosswalk = abs(contour_center_y - (y_min + y_max)//2)
+                    
+                    if distance_to_crosswalk < min_distance_to_crosswalk:
+                        min_distance_to_crosswalk = distance_to_crosswalk
+        
+        features['vehicle_count_nearby'] = vehicle_count
+        features['min_vehicle_distance_pixels'] = min_distance_to_crosswalk if min_distance_to_crosswalk != float('inf') else gray_image.shape[0]
+        
+        # Normalize distance
+        features['vehicle_proximity_threat'] = max(0, 1 - (min_distance_to_crosswalk / gray_image.shape[0]))
         
         return features
     
@@ -343,7 +377,10 @@ class FeatureExtraction:
             float(features['crosswalk_detected']),
             float(features.get('crosswalk_confidence', 0)),
             float(features.get('signal_safety', 0)),
-            float(features.get('vehicle_present', 0)),
+            #float(features.get('vehicle_present', 0)),
+            float(features.get('vehicle_proximity_threat',0)),
+            float(features.get('vehicle_count_nearby',0)),
+            float(features.get('min_vehicle_distance_pixels',0)),
             float(features.get('pedestrians_in_crosswalk', 0)),
             float(features.get('obstacle_coverage_ratio', 0)),
         ], dtype=np.float32)

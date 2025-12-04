@@ -12,7 +12,7 @@ def loadAnnotations(annotation_file, image_dir):
     annotated_images = {}
     with open(annotation_file, 'r') as file:
         dict_reader = csv.DictReader(file)
-        max =1000
+        max =500
         
         for entry in dict_reader:
             try:
@@ -27,7 +27,6 @@ def loadAnnotations(annotation_file, image_dir):
                 y2 = int(entry['y2'])
                 block = entry['block'] #whether walkway is blocked
                 image = mpimg.imread(f"{image_dir}/{image_name}")
-                print(f"Loaded image: {image.shape}")
                 points = [x1/4032, y1/3024, x2/4032, y2/3024] #normalized coordinate values to be between [0, 1]
                 #Images are stored as numpy arrays with shape (H = height, W= width, C = number of channels usually 3 for RGB)
                 #PyTorch expects images to be in shape (C, H, W)

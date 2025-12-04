@@ -338,27 +338,12 @@ class FeatureExtraction:
             
         return features
 
-    def extract_hsv_histogram(self, image):
-        """
-        Extract HSV color histogram features from the image.
-        """
-        # Convert image to HSV color space
-        hsv_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-
-        # Compute color histograms for each channel
-        #Arguments: image, channels, mask, histSize, ranges
-        # CHANNELS: 0 - Hue, 1 - Saturation(intensity), 2 - Value(brightness)
-        #Mask = None means it computes histogram for the whole image
-        h_hist = cv2.calcHist([hsv_image], [0], None, [32], [0, 180])
-        s_hist = cv2.calcHist([hsv_image], [1], None, [32], [0, 256])
-        v_hist = cv2.calcHist([hsv_image], [2], None, [32], [0, 256])
-
-        # Normalize histograms
-        h_hist = cv2.normalize(h_hist, h_hist).flatten()
-        s_hist = cv2.normalize(s_hist, s_hist).flatten()
-        v_hist = cv2.normalize(v_hist, v_hist).flatten()
-
-        # Concatenate histograms into a single feature vector
-        feature_vector = np.concatenate((h_hist, s_hist, v_hist))
-
-        return feature_vector
+    def features_to_tensor(self, features):
+        return np.array([
+            float(features['crosswalk_detected']),
+            float(features.get('crosswalk_confidence', 0)),
+            float(features.get('signal_safety', 0)),
+            float(features.get('vehicle_present', 0)),
+            float(features.get('pedestrians_in_crosswalk', 0)),
+            float(features.get('obstacle_coverage_ratio', 0)),
+        ], dtype=np.float32)

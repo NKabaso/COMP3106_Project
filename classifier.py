@@ -47,15 +47,18 @@ class SafetyDataset(Dataset):
             # Rule 1: Red light (0) is ALWAYS unsafe
             if mode_str == '0':
                 unsafe = True
-            # Rule 2: Green (1) with blocked path is unsafe
+            # Rule 3: Green (1) with blocked path is unsafe
             elif mode_str == '1' and block_str == 'blocked':
                 unsafe = True
-            # Rule 3: Countdown green (2) with blocked path is unsafe
+            # Rule 4: Countdown green (2) with blocked path is unsafe
             elif mode_str == '2' and block_str == 'blocked':
                 unsafe = True
-            # Rule 4: No signal (4) with blocked path is unsafe
+            # Rule 5: No signal (4) with blocked path is unsafe
             elif mode_str == '4' and block_str == 'blocked':
                 unsafe = True
+            # Rule 6: No signal (4) even with clear path is unsafe
+            elif mode_str == '4':
+                unsafe = True  # Conservative: no signal = unsafe
             # Everything else is safe
             else:
                 unsafe = False
@@ -187,12 +190,12 @@ def main():
     testing_dataset = SafetyDataset(label_testing_images, feature_extractor)
     
     # Standardize features
-    scaler = StandardScaler()
-    scaler.fit(train_dataset.data)  # compute mean/std across ALL samples
+    #scaler = StandardScaler()
+    #scaler.fit(train_dataset.data)  # compute mean/std across ALL samples
 
     # apply scaling
-    train_dataset.data = torch.tensor(scaler.transform(train_dataset.data), dtype=torch.float32)
-    validation_dataset.data = torch.tensor(scaler.transform(validation_dataset.data), dtype=torch.float32)
+    #train_dataset.data = torch.tensor(scaler.transform(train_dataset.data), dtype=torch.float32)
+    #validation_dataset.data = torch.tensor(scaler.transform(validation_dataset.data), dtype=torch.float32)
 
     # Train NN
     model = train_model(train_dataset, validation_dataset, epochs=25)
@@ -201,7 +204,7 @@ def main():
     evaluate(model, validation_dataset)
 
     # Save model
-    #torch.save(model.state_dict(), "safety_net.pth")
+    torch.save(model.state_dict(), "safety_net.pth")
     
     plot_confusion_matrix(model, validation_dataset)
     

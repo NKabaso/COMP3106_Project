@@ -26,6 +26,7 @@ class FeatureExtraction:
         
         features ={}
         
+        
         #Crosswalk detection (assumption: crosswalks are always present)
         crosswalk_features = self.detect_crosswalk_patterns(image, gray_image)
         features.update(crosswalk_features)
@@ -273,50 +274,7 @@ class FeatureExtraction:
         features['vehicle_proximity_threat'] = max(0, 1 - (min_distance_to_crosswalk / gray_image.shape[0]))
         
         return features
-    
-    def detect_vehicles(self, image, crosswalk_bbox):
-        """
-        Detect vehicles in the image using a pre-trained YOLO model.
-        """
-        features = {}
-        model = YOLO('yolov8n.pt')  # Load a pre-trained YOLOv8 model
-        cx, cy, cw, ch = crosswalk_bbox
-        cross_rect = (cx, cy, cx+cw, cy+ch)
-        results = model(image)
         
-        #Intersection over Union calculation
-        def iou(vehicle_box, cross_walk_box):
-            #Determines the overlap between two bounding boxes
-            x1 = max(vehicle_box[0], cross_walk_box[0])
-            y1 = max(vehicle_box[1], cross_walk_box[1])
-            x2 = min(vehicle_box[2], cross_walk_box[2])
-            y2 = min(vehicle_box[3], cross_walk_box[3])
-
-            inter = max(0, x2 - x1) * max(0, y2 - y1) #area of intersection
-            if inter == 0:
-                return 0
-
-            area1 = (vehicle_box[2]-vehicle_box[0]) * (vehicle_box[3]-vehicle_box[1])
-            area2 = (cross_walk_box[2]-cross_walk_box[0]) * (cross_walk_box[3]-cross_walk_box[1])
-            return inter / float(area1 + area2 - inter) #returns union area
-         
-        vehicle_count = 0
-        #detect vehicles in the image
-        for result in results:
-            for box in result.boxes:
-                cls_id = int(box.cls[0])
-                confidence =float(box.conf[0])
-                x1, y1, x2, y2 = map(int, box.xyxy[0])
-                # COCO vehicle class IDs:
-                # car=2, motorcycle=3, bus=5, truck=7
-                if cls_id in [2, 3, 5, 7] and confidence > 0.5 and iou((x1, y1, x2, y2), cross_rect) > 0.05: 
-                    vehicle_count += 1
-        
-        features['vehicle_count'] = vehicle_count
-        features['vehicle_present'] = vehicle_count > 0
-        
-        return features
-    
     #Reexamine use
     #DeepSeek code
     def analyze_pedestrian_blockage(self, image, gray_scale_image, crosswalk_bbox, crosswalk_mask):
@@ -374,13 +332,19 @@ class FeatureExtraction:
 
     def features_to_tensor(self, features):
         return np.array([
+            # Traffic light detection
+            float(features.get('red_light_detected', 0)),
+            float(features.get('green_light_detected', 0)),
+
+            # Crosswalk
             float(features['crosswalk_detected']),
             float(features.get('crosswalk_confidence', 0)),
-            float(features.get('signal_safety', 0)),
-            #float(features.get('vehicle_present', 0)),
-            float(features.get('vehicle_proximity_threat',0)),
-            float(features.get('vehicle_count_nearby',0)),
-            float(features.get('min_vehicle_distance_pixels',0)),
+
+            # Vehicles
+            float(features.get('vehicle_proximity_threat', 0)),
+            float(min(features.get('vehicle_count_nearby', 0) / 5, 1.0)),  # Normalize!
+
+            # Obstacles
             float(features.get('pedestrians_in_crosswalk', 0)),
             float(features.get('obstacle_coverage_ratio', 0)),
         ], dtype=np.float32)

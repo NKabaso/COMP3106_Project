@@ -10,17 +10,13 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 from torch.utils.data import DataLoader
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import precision_score, recall_score
+from sklearn.preprocessing import StandardScaler
+import collections
 #from model import SafetyNet
 
-#Weighted safety score
-weights = {
-            'crosswalk': 0.20,
-            'signal': 0.25,
-            'vehicles_in_way': 0.3,
-            'pedestrians': 0.10,
-            'obstacles': 0.05,
-        }
 
+# Neural Network Classifier
 class SafetyNet(nn.Module):
     def __init__(self, input_dim=8, hidden_dim=32): #8 input layers, 32 hidden layers
         super(SafetyNet, self).__init__()
@@ -39,15 +35,33 @@ class SafetyDataset(Dataset):
     def __init__(self, labeled_images, feature_extractor):
         self.data = []
         self.labels = []
+        
 
         for _, (image, mode, _, block) in labeled_images.items():
             features = feature_extractor.analyze(image) #extracts features
             x = feature_extractor.features_to_tensor(features) #converts to a tensor friendly array
-
-            # label logic
-            #Assuming it is only safe if the light is green and the road isn't blocked
-            safe = ((mode in ['1', '2']) and (block == 'not_blocked')) or mode ==2
-            y = 0 if safe else 1
+             # UNSAFE = 1, SAFE = 0
+            unsafe = False
+            mode_str = str(mode).strip()
+            block_str = str(block).strip().lower()
+            # Rule 1: Red light (0) is ALWAYS unsafe
+            if mode_str == '0':
+                unsafe = True
+            # Rule 2: Green (1) with blocked path is unsafe
+            elif mode_str == '1' and block_str == 'blocked':
+                unsafe = True
+            # Rule 3: Countdown green (2) with blocked path is unsafe
+            elif mode_str == '2' and block_str == 'blocked':
+                unsafe = True
+            # Rule 4: No signal (4) with blocked path is unsafe
+            elif mode_str == '4' and block_str == 'blocked':
+                unsafe = True
+            # Everything else is safe
+            else:
+                unsafe = False
+            
+            y = 1 if unsafe else 0
+            
 
             self.data.append(x)
             self.labels.append(y)
@@ -129,6 +143,11 @@ def plot_confusion_matrix(model, dataset):
             all_labels.append(y)
 
     cm = confusion_matrix(all_labels, all_preds)
+    precision = precision_score(all_labels, all_preds, pos_label=1)
+    recall = recall_score(all_labels, all_preds, pos_label=1)
+
+    print(f"Precision (unsafe class): {precision:.4f}")
+    print(f"Recall (unsafe class):    {recall:.4f}")
     disp = ConfusionMatrixDisplay(cm, display_labels=["Safe", "Unsafe"])
     disp.plot(cmap="Blues")
     plt.title("Confusion Matrix")
@@ -151,40 +170,51 @@ def main():
     #Directory paths
     #ImVisible: Pedestrian Traffic Light Dataset
     IMAGE_DIR = 'dataset'
+    IMAGE_DIR_TEST = 'validation_testing_dataset'
     TRAINING_ANNOTATIONS = 'training_file.csv'
     VALIDATION_ANNOTATIONS = 'validation_file.csv'
     TESTING_ANNOTATIONS = 'testing_file.csv'
     
     labeled_training_images = helpers.loadAnnotations(TRAINING_ANNOTATIONS, IMAGE_DIR)
-    labeled_validation_images = helpers.loadAnnotations(VALIDATION_ANNOTATIONS, IMAGE_DIR)
-    combined_labels = helpers.combine_labels_with_one_hot(labeled_training_images)
-    
+    labeled_validation_images = helpers.loadAnnotations(VALIDATION_ANNOTATIONS, IMAGE_DIR_TEST)
+    label_testing_images = helpers.loadAnnotations(TESTING_ANNOTATIONS, IMAGE_DIR_TEST)
     #Create feature analyzer
     feature_extractor = FeatureExtraction.FeatureExtraction()
     
     # Create dataset
     train_dataset = SafetyDataset(labeled_training_images, feature_extractor)
     validation_dataset = SafetyDataset(labeled_validation_images, feature_extractor)
+    testing_dataset = SafetyDataset(label_testing_images, feature_extractor)
+    
+    # Standardize features
+    scaler = StandardScaler()
+    scaler.fit(train_dataset.data)  # compute mean/std across ALL samples
+
+    # apply scaling
+    train_dataset.data = torch.tensor(scaler.transform(train_dataset.data), dtype=torch.float32)
+    validation_dataset.data = torch.tensor(scaler.transform(validation_dataset.data), dtype=torch.float32)
 
     # Train NN
     model = train_model(train_dataset, validation_dataset, epochs=25)
 
     # Evaluate
-    evaluate(model, train_dataset)
+    evaluate(model, validation_dataset)
 
     # Save model
-    torch.save(model.state_dict(), "safety_net.pth")
-    print("Model saved.")
+    #torch.save(model.state_dict(), "safety_net.pth")
     
     plot_confusion_matrix(model, validation_dataset)
     
     #Random image test
-    random_key = random.choice(list(labeled_training_images.keys()))
-    image, _, _, _ = labeled_training_images[random_key]
-    output = single_image_test(model,image, feature_extractor)
-    print(f"It is {output} to cross")
-    plt.imshow(image)
-    plt.show()
+    for cnt in range(5):
+        random_key = random.choice(list(labeled_training_images.keys()))
+        image, _, _, _ = labeled_training_images[random_key]
+        output = single_image_test(model,image, feature_extractor)
+        #print(f"It is {output} to cross")
+        plt.imshow(image)
+        h, w, _ = image.shape
+        plt.text(w//2, 0, output, ha="center", color="black", fontsize=18) #labels image
+        plt.show()
     
     
 
